@@ -1,42 +1,46 @@
-"""Streamlit chat UI — runs standalone (no FastAPI needed).
-
-Uses the RAG pipeline directly so it works on Streamlit Cloud.
-"""
+"""Streamlit chat UI — standalone, no FastAPI needed."""
 from __future__ import annotations
 
-import logging
 import sys
 import time
 import uuid
 from pathlib import Path
 
-# Make sure project root is importable
+# Make project root importable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import streamlit as st
 
+# ⚠️ set_page_config MUST be the first Streamlit command
+st.set_page_config(page_title="FinBase RAG Assistant", page_icon="💰", layout="wide")
+
+# Everything else imports AFTER set_page_config
+import logging
+
+from src.embed import ensure_index
 from src.generate import generate_answer
 from src.guardrails import ABSTENTION, confidence_ok, groundedness_check
 from src.query_rewrite import rewrite
 from src.retrieve import retrieve
-from src.embed import ensure_index
-logging.basicConfig(level="INFO", format="%(asctime)s | %(levelname)s | %(message)s")
-log = logging.getLogger("ui")
-
-st.set_page_config(page_title="FinBase RAG Assistant", page_icon="💰", layout="wide")
-st.title("FinBase Customer Support Assistant")
-st.caption("RAG · Hybrid retrieval · Grounded answers with citations")
-# Build the Chroma index on first load if it's missing
-with st.spinner("Preparing knowledge base (first run only)…"):
-    _n = ensure_index()
-    if _n == 0:
-        st.error("Failed to load knowledge base. Check logs.")
-        st.stop()
 
 logging.basicConfig(level="INFO", format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("ui")
 
-st.set_page_config(page_title="FinBase RAG Assistant", page_icon="💰", layout="wide")
+
+@st.cache_resource(show_spinner="Preparing knowledge base (first run only)…")
+def _prepare_index() -> int:
+    """Build Chroma index once, cached across reruns and sessions."""
+    return ensure_index()
+
+
+# Build/load index (cached)
+_count = _prepare_index()
+if _count == 0:
+    st.error("Failed to load knowledge base. Check app logs.")
+    st.stop()
+
+
+# ---- Page content ----
 st.title("FinBase Customer Support Assistant")
 st.caption("RAG · Hybrid retrieval · Grounded answers with citations")
 
@@ -72,9 +76,7 @@ with st.sidebar:
 
 
 def _run_rag(question: str) -> dict:
-    """Run the full RAG pipeline and return answer + sources."""
     t0 = time.perf_counter()
-
     standalone = rewrite(question, st.session_state.history)
     log.info("q=%r rewritten=%r", question, standalone)
 
@@ -82,48 +84,54 @@ def _run_rag(question: str) -> dict:
     passes, conf = confidence_ok(chunks)
 
     if not passes:
-        answer = ABSTENTION
-        sources = []
-        g = {"passed": True}
-    else:
-        try:
-            answer = generate_answer(standalone, chunks)
-            g = groundedness_check(answer, chunks)
-            if not g["passed"]:
-                log.warning("groundedness failed: %s", g)
-                answer = ABSTENTION
-                sources = []
-            else:
-                sources = [
-                    {
-                        "chunk_id": c.chunk_id,
-                        "section_number": c.metadata.get("section_number", ""),
-                        "section_title": c.metadata.get("section_title", ""),
-                        "chunk_type": c.metadata.get("chunk_type", ""),
-                        "source_page": c.metadata.get("source_page", 0),
-                        "faq_ids": c.metadata.get("faq_ids", ""),
-                        "text": c.text,
-                        "retrieval_score": round(c.retrieval_score, 4),
-                        "rerank_score": round(c.rerank_score, 4),
-                    }
-                    for c in chunks
-                ]
-        except Exception as e:
-            log.exception("generation failed")
-            answer = f"⚠️ Error: {e}"
-            sources = []
-            g = {"passed": False}
+        return {
+            "answer": ABSTENTION,
+            "sources": [],
+            "confidence": round(conf, 4),
+            "latency_ms": int((time.perf_counter() - t0) * 1000),
+        }
 
-    return {
-        "answer": answer,
-        "sources": sources,
-        "confidence": round(conf, 4),
-        "latency_ms": int((time.perf_counter() - t0) * 1000),
-        "groundedness": g,
-    }
+    try:
+        answer = generate_answer(standalone, chunks)
+        g = groundedness_check(answer, chunks)
+        if not g["passed"]:
+            log.warning("groundedness failed: %s", g)
+            return {
+                "answer": ABSTENTION,
+                "sources": [],
+                "confidence": round(conf, 4),
+                "latency_ms": int((time.perf_counter() - t0) * 1000),
+            }
+        sources = [
+            {
+                "chunk_id": c.chunk_id,
+                "section_number": c.metadata.get("section_number", ""),
+                "section_title": c.metadata.get("section_title", ""),
+                "chunk_type": c.metadata.get("chunk_type", ""),
+                "source_page": c.metadata.get("source_page", 0),
+                "faq_ids": c.metadata.get("faq_ids", ""),
+                "text": c.text,
+                "rerank_score": round(c.rerank_score, 4),
+            }
+            for c in chunks
+        ]
+        return {
+            "answer": answer,
+            "sources": sources,
+            "confidence": round(conf, 4),
+            "latency_ms": int((time.perf_counter() - t0) * 1000),
+        }
+    except Exception as e:
+        log.exception("generation failed")
+        return {
+            "answer": f"⚠️ Error: {e}",
+            "sources": [],
+            "confidence": round(conf, 4),
+            "latency_ms": int((time.perf_counter() - t0) * 1000),
+        }
 
 
-# Render existing messages
+# Render chat history
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
@@ -137,17 +145,12 @@ for msg in st.session_state.messages:
                         f"`{s['chunk_type']}` · page {s['source_page']} · "
                         f"rerank `{s['rerank_score']:.3f}`"
                     )
-                    if s.get("faq_ids"):
-                        st.caption(f"FAQ IDs: {s['faq_ids']}")
                     st.text_area(
-                        "chunk",
-                        s["text"],
-                        height=100,
-                        disabled=True,
+                        "chunk", s["text"], height=100, disabled=True,
                         key=f"c_{s['chunk_id']}_{uuid.uuid4().hex[:4]}",
                     )
 
-# Input
+# Chat input
 prompt = st.chat_input("Ask about FinBase products…")
 if "pending" in st.session_state and st.session_state.pending:
     prompt = st.session_state.pop("pending")
@@ -160,8 +163,7 @@ if prompt:
     with st.chat_message("assistant"):
         with st.spinner("Retrieving and generating…"):
             result = _run_rag(prompt)
-            answer = result["answer"]
-            st.markdown(answer)
+            st.markdown(result["answer"])
             if result["sources"]:
                 with st.expander(
                     f"📎 Sources ({len(result['sources'])}) · "
@@ -175,18 +177,17 @@ if prompt:
                             f"rerank `{s['rerank_score']:.3f}`"
                         )
                         st.text_area(
-                            "chunk",
-                            s["text"],
-                            height=100,
-                            disabled=True,
+                            "chunk", s["text"], height=100, disabled=True,
                             key=f"c_{s['chunk_id']}_{uuid.uuid4().hex[:4]}",
                         )
 
             st.session_state.messages.append({
                 "role": "assistant",
-                "content": answer,
+                "content": result["answer"],
                 "sources": result["sources"],
                 "confidence": result["confidence"],
             })
             st.session_state.history.append({"role": "user", "content": prompt})
-            st.session_state.history.append({"role": "assistant", "content": answer})
+            st.session_state.history.append(
+                {"role": "assistant", "content": result["answer"]}
+            )
