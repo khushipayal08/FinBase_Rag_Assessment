@@ -118,3 +118,40 @@ def _sanitize_meta(c: dict) -> dict:
         else:
             out[k] = json.dumps(v, ensure_ascii=False)
     return out
+def ensure_index() -> int:
+    """Build the Chroma index if it's empty. Returns chunk count.
+
+    Streamlit Cloud deployment doesn't ship data/chroma/ (gitignored),
+    so we rebuild on first run. Subsequent runs reuse the cache.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+
+    try:
+        col = get_collection()
+        count = col.count()
+        if count > 0:
+            log.info("Chroma index ready: %d chunks", count)
+            return count
+    except Exception as e:
+        log.warning("Could not read Chroma count: %s", e)
+
+    log.info("Chroma index empty — building from PDF...")
+
+    # Import here to avoid circular imports
+    from pathlib import Path
+    from src.ingest import extract_pages
+    from src.preprocess import clean_document
+    from src.chunk import build_all_chunks
+
+    pdf = Path("data/raw/sample_1.pdf")
+    if not pdf.exists():
+        log.error("PDF not found at %s", pdf)
+        return 0
+
+    pages = extract_pages(pdf)
+    cleaned = {p: clean_document(t) for p, t in pages.items()}
+    chunks = build_all_chunks(cleaned)
+    chunks = [c for c in chunks if c.get("text") and c["text"].strip()]
+
+    return index_chunks(chunks)

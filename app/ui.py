@@ -19,6 +19,19 @@ from src.generate import generate_answer
 from src.guardrails import ABSTENTION, confidence_ok, groundedness_check
 from src.query_rewrite import rewrite
 from src.retrieve import retrieve
+from src.embed import ensure_index
+logging.basicConfig(level="INFO", format="%(asctime)s | %(levelname)s | %(message)s")
+log = logging.getLogger("ui")
+
+st.set_page_config(page_title="FinBase RAG Assistant", page_icon="💰", layout="wide")
+st.title("FinBase Customer Support Assistant")
+st.caption("RAG · Hybrid retrieval · Grounded answers with citations")
+# Build the Chroma index on first load if it's missing
+with st.spinner("Preparing knowledge base (first run only)…"):
+    _n = ensure_index()
+    if _n == 0:
+        st.error("Failed to load knowledge base. Check logs.")
+        st.stop()
 
 logging.basicConfig(level="INFO", format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("ui")
