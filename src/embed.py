@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import chromadb
 from chromadb.config import Settings as ChromaSettings
@@ -26,7 +27,7 @@ def _get_model() -> SentenceTransformer:
 
 
 def embed_documents(texts: list[str]) -> list[list[float]]:
-    # Filter out empty/whitespace-only texts — empty lists crash the encoder.
+    # Filter empty/whitespace-only texts — empty lists crash the encoder.
     clean_texts = [t for t in texts if t and t.strip() and len(t.strip()) > 3]
     log.info("embed_documents: received %d, kept %d", len(texts), len(clean_texts))
 
@@ -74,7 +75,6 @@ def get_collection(name: str = "finbase") -> chromadb.Collection:
 
 def index_chunks(chunks: list[dict], collection_name: str = "finbase") -> int:
     """Wipe + rebuild. Idempotent for reproducible evaluation."""
-    # Pre-filter: drop chunks with empty text
     chunks = [c for c in chunks if c.get("text") and c["text"].strip()]
     log.info("index_chunks: %d chunks after empty-filter", len(chunks))
 
@@ -106,27 +106,12 @@ def index_chunks(chunks: list[dict], collection_name: str = "finbase") -> int:
     return len(chunks)
 
 
-def _sanitize_meta(c: dict) -> dict:
-    """Chroma only accepts str/int/float/bool — JSON-encode the rest."""
-    import json
-    out: dict = {}
-    for k, v in c.items():
-        if k == "text":
-            continue
-        if isinstance(v, (str, int, float, bool)):
-            out[k] = v
-        else:
-            out[k] = json.dumps(v, ensure_ascii=False)
-    return out
 def ensure_index() -> int:
     """Build the Chroma index if it's empty. Returns chunk count.
 
     Streamlit Cloud deployment doesn't ship data/chroma/ (gitignored),
     so we rebuild on first run. Subsequent runs reuse the cache.
     """
-    import logging
-    log = logging.getLogger(__name__)
-
     try:
         col = get_collection()
         count = col.count()
@@ -138,8 +123,6 @@ def ensure_index() -> int:
 
     log.info("Chroma index empty — building from PDF...")
 
-    # Import here to avoid circular imports
-    from pathlib import Path
     from src.ingest import extract_pages
     from src.preprocess import clean_document
     from src.chunk import build_all_chunks
@@ -155,3 +138,17 @@ def ensure_index() -> int:
     chunks = [c for c in chunks if c.get("text") and c["text"].strip()]
 
     return index_chunks(chunks)
+
+
+def _sanitize_meta(c: dict) -> dict:
+    """Chroma only accepts str/int/float/bool — JSON-encode the rest."""
+    import json
+    out: dict = {}
+    for k, v in c.items():
+        if k == "text":
+            continue
+        if isinstance(v, (str, int, float, bool)):
+            out[k] = v
+        else:
+            out[k] = json.dumps(v, ensure_ascii=False)
+    return out
