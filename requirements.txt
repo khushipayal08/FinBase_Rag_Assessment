@@ -1,0 +1,30 @@
+# core
+python-dotenv==1.0.1
+pydantic==2.8.2
+pydantic-settings==2.4.0
+
+# pdf
+pymupdf==1.24.9
+pdfplumber==0.11.4
+pytesseract==0.3.13
+Pillow==10.4.0
+
+# rag
+sentence-transformers==3.0.1
+chromadb==0.5.5
+rank-bm25==0.2.2
+
+# llm
+google-genai
+
+# api + ui
+fastapi==0.115.0
+uvicorn[standard]==0.31.1
+streamlit==1.38.0
+requests==2.32.3
+
+# eval
+pandas==2.2.2
+
+# dev
+pytest==8.3.2
