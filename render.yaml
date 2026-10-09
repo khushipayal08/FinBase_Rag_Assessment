@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: finbase-rag-backend
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        value: gemini-flash-latest
+      - key: EMBEDDING_MODEL
+        value: BAAI/bge-small-en-v1.5
+      - key: RERANKER_MODEL
+        value: BAAI/bge-reranker-base
+      - key: CONFIDENCE_THRESHOLD
+        value: "0.35"
+      - key: CHROMA_DIR
+        value: ./data/chroma
